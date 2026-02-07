@@ -1,4 +1,4 @@
-# 🎓 DU-ID-Scanner
+# 🏛️ DU ID Scanner
 
 **Delta University – Automated Student ID OCR System**
 
@@ -155,3 +155,4 @@ If you find this project useful:
 🔁 Share it with the community
 
 🤝 Connect on LinkedIn
+
