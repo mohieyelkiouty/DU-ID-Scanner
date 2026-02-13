@@ -5,67 +5,45 @@ import easyocr
 import base64
 from PIL import Image
 
-# 1. Function to convert local background image to base64
+# --- convert local background image to base64 ---
 def get_base64_image(image_path):
-    with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode()
+    try:
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    except:
+        return None
 
-# 2. Page Configuration
+# --- Page Configuration ---
 st.set_page_config(page_title="Delta University | ID Scanner", page_icon="🎓", layout="centered")
 
-# 3. Enhanced CSS Styling
-try:
-    bg_base64 = get_base64_image("background.jpg")
+# --- Enhanced CSS Styling ---
+bg_base64 = get_base64_image("assets/background.jpg")
+if bg_base64:
     st.markdown(f"""
         <style>
         .stApp {{
             background-image: url("data:image/jpg;base64,{bg_base64}");
-            background-attachment: fixed;
-            background-size: cover;
-            background-position: center;
+            background-attachment: fixed; background-size: cover; background-position: center;
         }}
-        
-        /* Darker overlay to make White Text pop */
         .stApp::before {{
-            content: "";
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.5); /* Black transparent layer */
-            z-index: -1;
+            content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.6); z-index: -1;
         }}
-
-        /* Make ALL text WHITE */
         h1, h2, h3, p, span, label, .stMarkdown {{ 
-            color: #FFFFFF !important; 
-            font-weight: bold !important; 
+            color: #FFFFFF !important; font-weight: bold !important; 
         }}
-
-        /* Gold Button Style */
         .stButton>button {{
-            background-color: #C5A059 !important;
-            color: white !important;
-            border-radius: 15px !important;
-            border: none !important;
-            font-weight: bold !important;
-            width: 100%;
+            background-color: #C5A059 !important; color: white !important;
+            border-radius: 15px !important; border: none !important; width: 100%;
         }}
-
-        /* Specific style for file uploader text */
-        .st-emotion-cache-1ae8k9u {{ color: white !important; }}
         </style>
         """, unsafe_allow_html=True)
-except:
-    st.warning("Please ensure 'background.jpg' is in the project folder.")
 
 # --- Header Section ---
-col_logo, col_head = st.columns([2, 4]) 
-
+col_logo, col_head = st.columns([1, 4]) 
 with col_logo:
-    try:
-        st.image("Delta Univ.png", width=120)
-    except:
-        st.write("🎓")
-
+    try: st.image("assets/Delta Univ.png", width=100)
+    except: st.title("🎓")
 with col_head:
     st.title("Delta University")
     st.write("Automated ID Recognition System")
@@ -82,9 +60,7 @@ def final_balanced_clean(image_crop):
     contrast = clahe.apply(gray)
     blurred = cv2.GaussianBlur(contrast, (3, 3), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = np.ones((2,2), np.uint8)
-    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    return closed
+    return thresh
 
 @st.cache_resource
 def load_ocr():
@@ -92,41 +68,85 @@ def load_ocr():
 
 reader = load_ocr()
 
-# --- Main logic ---
+# --- Template Matching & Alignment ---
+def align_single_template_scene(scene_img, template_img, min_matches=8):
+    gray_scene = cv2.cvtColor(scene_img, cv2.COLOR_BGR2GRAY)
+    gray_temp  = cv2.cvtColor(template_img, cv2.COLOR_BGR2GRAY)
+
+    sift = cv2.SIFT_create()
+    kp_temp, des_temp   = sift.detectAndCompute(gray_temp, None)
+    kp_scene, des_scene = sift.detectAndCompute(gray_scene, None)
+
+    if des_scene is None or des_temp is None:
+        return None
+
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(des_temp, des_scene, k=2)
+
+    good = []
+    for m, n in matches:
+        if m.distance < 0.75 * n.distance:
+            good.append(m)
+
+    if len(good) < min_matches:
+        return None
+
+    src_pts = np.float32([kp_temp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp_scene[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+
+    M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+    if M is None:
+        return None
+
+    h, w = gray_temp.shape
+    aligned = cv2.warpPerspective(scene_img, M, (w, h))
+    return aligned
+
+# --- Main Logic ---
 uploaded_file = st.file_uploader("Upload ID Card", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, 1)
     
-    with st.spinner('Processing...'):
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 30, 150)
-        contours, _ = cv2.findContours(cv2.dilate(edged, np.ones((5,5))), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    with st.spinner('Processing Card...'):
+        template = cv2.imread("assets/template.png") 
+        
+        if template is None:
+            st.error("Template file not found in assets folder!")
+            st.stop()
 
-        if len(contours) > 0:
-            x, y, w, h = cv2.boundingRect(contours[0])
-            crop = img[y + int(h * 0.22) : y + int(h * 0.90), x + int(w * 0.02) : x + int(w * 0.98)]
-            final_for_ocr = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), (800, 500))
+        crop = align_single_template_scene(img, template)
+        
+        if crop is not None:
+            final_for_ocr = cv2.resize(crop, (800, 500))
             
             zones = {
-                "Name": final_for_ocr[80:250, 10:640], 
-                "ID_Number": final_for_ocr[330:430, 175:380] 
+                "Student Name": final_for_ocr[140:280, 10:640], 
+                "ID Number": final_for_ocr[330:400, 175:380] 
             }
 
-            st.markdown("### Extracted Results")
-            for label, zone_img in zones.items():
+            st.markdown("### 📋 Extracted Results")
+            cols = st.columns(2)
+            
+            for idx, (label, zone_img) in enumerate(zones.items()):
                 cleaned = final_balanced_clean(zone_img)
-                text = " ".join(reader.readtext(cleaned, detail=0)).strip()
+                results = reader.readtext(cleaned, detail=0)
+                text = " ".join(results).strip()
                 
-                if label == "Name":
+                if "Name" in label:
                     text = ''.join(filter(lambda x: x.isalpha() or x.isspace(), text))
                 else:
                     text = ''.join(filter(str.isdigit, text))
-                
-                st.write(f"**{label}:**")
-                st.success(text if text else "Not found")
+
+                with cols[idx % 2]:
+                    st.write(f"**{label}:**")
+                    if text:
+                        st.success(text)
+                    else:
+                        st.warning("Not detected")
+            
+            with st.expander("See Aligned Card"):
+                st.image(cv2.cvtColor(final_for_ocr, cv2.COLOR_BGR2RGB))
         else:
-            st.error("Card detection failed.")
+            st.error("Card detection failed. Please ensure the card is clear and flat.")
