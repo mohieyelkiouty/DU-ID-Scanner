@@ -64,7 +64,7 @@ def final_balanced_clean(image_crop):
 
 @st.cache_resource
 def load_ocr():
-    return easyocr.Reader(['en'], gpu=False)
+    return easyocr.Reader(['en'], gpu=False, download_enabled=True)
 
 reader = load_ocr()
 
@@ -150,3 +150,4 @@ if uploaded_file is not None:
                 st.image(cv2.cvtColor(final_for_ocr, cv2.COLOR_BGR2RGB))
         else:
             st.error("Card detection failed. Please ensure the card is clear and flat.")
+
